@@ -1,0 +1,11 @@
+# Never commit credentials or local config
+.env
+*.env
+claude_desktop_config.json
+*.log
+
+# Python / uv
+__pycache__/
+*.pyc
+.venv/
+*.lock
