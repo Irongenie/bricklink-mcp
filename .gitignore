@@ -9,3 +9,6 @@ __pycache__/
 *.pyc
 .venv/
 *.lock
+
+# Wanted lists saved by build_wanted_list_xml
+wanted/

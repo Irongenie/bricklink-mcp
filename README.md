@@ -101,6 +101,33 @@ BrickLink's API has no buying functions: no carts, no checkout, and no wanted-li
 - "Make a wanted list of every part in 10497-1, used condition, and save it as galaxy-explorer."
 - "Build a wanted list for these parts: 2x 3023 reddish brown, 4x 2780 black."
 
+### Pricing and listing
+
+- `review_pricing` compares every lot in your store against BrickLink's 6-month sold average for the same item, color and condition, and flags anything more than 20% above or below (adjustable). Ask: "Review my BrickLink pricing."
+- `draft_set_listing` drafts a set listing: pulls sold and for-sale prices, suggests a price, and writes a description from only what you tell it (box, instructions, minifigs, missing parts, notes). It doesn't create anything; after you review it, Claude can create the lot with `create_inventory`, which goes to your stockroom by default and needs writes enabled. Ask: "Draft a listing for 75292-1, used, complete, box has shelf wear."
+
+Price guides for sets don't separate complete from incomplete copies, so treat suggestions for incomplete sets as a starting point.
+
+## Updating
+
+If you installed with Git (recommended), updating is:
+
+```
+cd $env:USERPROFILE\bricklink-mcp
+git pull
+Stop-Process -Name claude -Force
+```
+
+then reopen Claude Desktop. To switch an existing manual install to Git: install Git (`winget install --id Git.Git -e --source winget`), open a new PowerShell window, then
+
+```
+cd $env:USERPROFILE
+Rename-Item bricklink-mcp bricklink-mcp-old
+git clone https://github.com/Irongenie/bricklink-mcp.git
+```
+
+The folder path stays the same, so the Claude Desktop config doesn't change. Delete `bricklink-mcp-old` once the new copy works.
+
 ## Troubleshooting
 
 - **Nothing shows under Developer after editing the config (Windows Store version):** the app may read `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`. The live log (`%LOCALAPPDATA%\Claude\Logs\main.log`) has a line "Reading claude_desktop_config.json from ..." that shows which file it uses.

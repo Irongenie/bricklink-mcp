@@ -253,6 +253,104 @@ def find_color(name: str) -> list[dict]:
     return [{"color_id": cid, "color": cname} for cid, cname in (_colors or {}).items() if n in cname.lower()]
 
 
+@mcp.tool()
+def review_pricing(search: str | None = None, item_type: str | None = None, include_stockroom: bool = True,
+                   threshold_pct: float = 20.0, currency_code: str = "USD", max_lots: int = 50) -> dict:
+    """Compare your store lots' prices with BrickLink's last-6-months sold average for the same item,
+    color and condition. Flags lots more than threshold_pct above or below the market.
+    One price-guide call per lot, so large stores should narrow with search/item_type or max_lots.
+    Note: set price guides don't separate complete from incomplete sets."""
+    data = _call("GET", "/inventories", {"item_type": _type(item_type) if item_type else None})
+    lots = [_lot(i) for i in data or []]
+    if search:
+        s = search.lower()
+        lots = [l for l in lots if s in str(l["no"]).lower() or s in str(l["name"]).lower()]
+    if not include_stockroom:
+        lots = [l for l in lots if not l["stockroom"]]
+    skipped = max(0, len(lots) - max_lots)
+    rows, cache = [], {}
+    for l in lots[:max_lots]:
+        key = (l["type"], l["no"], l["color_id"], l["cond"])
+        if key not in cache:
+            try:
+                pg = _call("GET", f"/items/{l['type']}/{l['no']}/price", {
+                    "color_id": l["color_id"] or None, "guide_type": "sold",
+                    "new_or_used": l["cond"], "currency_code": currency_code})
+                cache[key] = pg
+            except BrickLinkError as e:
+                cache[key] = {"error": str(e)}
+        pg = cache[key]
+        price = float(l["price"] or 0)
+        avg = float(pg.get("qty_avg_price") or pg.get("avg_price") or 0) if "error" not in pg else 0
+        row = {"inventory_id": l["inventory_id"], "item": f"{l['no']} {l['name']}", "color": l["color"],
+               "cond": l["cond"], "stockroom": l["stockroom"], "your_price": round(price, 2),
+               "sold_avg": round(avg, 2) if avg else None,
+               "sold_min": pg.get("min_price"), "sold_max": pg.get("max_price"),
+               "sales_count": pg.get("unit_quantity")}
+        if "error" in pg:
+            row["verdict"] = "price guide unavailable"
+        elif not avg or not pg.get("unit_quantity"):
+            row["verdict"] = "no recent sales"
+        else:
+            diff = (price - avg) / avg * 100
+            row["diff_pct"] = round(diff, 1)
+            row["verdict"] = ("above market" if diff > threshold_pct else
+                              "below market" if diff < -threshold_pct else "in line")
+        rows.append(row)
+    rows.sort(key=lambda r: -abs(r.get("diff_pct", 0)))
+    out = {"lots_reviewed": len(rows), "flagged": sum(r["verdict"] in ("above market", "below market") for r in rows),
+           "threshold_pct": threshold_pct, "lots": rows}
+    if skipped:
+        out["not_reviewed"] = skipped
+    return out
+
+
+@mcp.tool()
+def draft_set_listing(set_no: str, new_or_used: str = "U", complete: bool = True, has_box: bool = True,
+                      box_notes: str | None = None, has_instructions: bool = True,
+                      minifigs_included: bool = True, missing: str | None = None,
+                      notes: str | None = None, currency_code: str = "USD") -> dict:
+    """Draft a listing for a set you're about to sell: pulls the catalog name, recent sold and current
+    for-sale prices, suggests a price, and writes a description. Nothing is created on BrickLink;
+    review the draft, then create it with create_inventory (it goes to the stockroom by default).
+    set_no needs the -1 suffix (e.g. 21322-1). Only states what you pass in - no assumed claims."""
+    item = _call("GET", f"/items/SET/{set_no}")
+    cond = new_or_used.upper()
+    sold = _call("GET", f"/items/SET/{set_no}/price", {"guide_type": "sold", "new_or_used": cond,
+                                                       "currency_code": currency_code})
+    stock = _call("GET", f"/items/SET/{set_no}/price", {"guide_type": "stock", "new_or_used": cond,
+                                                        "currency_code": currency_code})
+    sold_avg = float(sold.get("qty_avg_price") or sold.get("avg_price") or 0)
+    stock_min = float(stock.get("min_price") or 0)
+    suggested = sold_avg if sold_avg else stock_min
+    if not complete and suggested:
+        suggested *= 0.85
+    parts = [f"{set_no} {item.get('name')}."]
+    if has_box:
+        parts.append(f"Includes Box{' - ' + box_notes if box_notes else ''}.")
+    else:
+        parts.append("No box.")
+    parts.append("Includes Instructions." if has_instructions else "No instructions.")
+    if complete:
+        parts.append("Complete" + (" with Minifigs." if minifigs_included else "."))
+    else:
+        parts.append(f"Incomplete - missing: {missing or '(list what is missing)'}.")
+    if notes:
+        parts.append(notes.strip().rstrip(".") + ".")
+    return {
+        "item": f"SET {set_no} {item.get('name')}", "year": item.get("year_released"),
+        "condition": cond, "completeness": "C" if complete else "B",
+        "sold_6mo": {k: sold.get(k) for k in ("min_price", "qty_avg_price", "max_price", "unit_quantity")},
+        "for_sale_now": {k: stock.get(k) for k in ("min_price", "qty_avg_price", "max_price", "unit_quantity")},
+        "suggested_price": round(suggested, 2) if suggested else None,
+        "price_basis": ("6-month sold average" if sold_avg else "lowest current listing" if stock_min else "no data")
+                       + (", reduced 15% for incomplete" if (not complete and suggested) else ""),
+        "description": " ".join(parts),
+        "next_step": "Review, then create_inventory(item_type='SET', item_no=..., quantity=1, unit_price=..., "
+                     "new_or_used=..., completeness=..., description=...). Needs BRICKLINK_ALLOW_WRITES=true.",
+    }
+
+
 _XML_TYPE = {"PART": "P", "SET": "S", "MINIFIG": "M", "BOOK": "B", "GEAR": "G",
              "CATALOG": "C", "INSTRUCTION": "I", "ORIGINAL_BOX": "O"}
 
