@@ -253,6 +253,87 @@ def find_color(name: str) -> list[dict]:
     return [{"color_id": cid, "color": cname} for cid, cname in (_colors or {}).items() if n in cname.lower()]
 
 
+_XML_TYPE = {"PART": "P", "SET": "S", "MINIFIG": "M", "BOOK": "B", "GEAR": "G",
+             "CATALOG": "C", "INSTRUCTION": "I", "ORIGINAL_BOX": "O"}
+
+
+def _xml_escape(s: str) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&apos;"))
+
+
+@mcp.tool()
+def build_wanted_list_xml(parts: list[dict] | None = None, from_item: str | None = None,
+                          from_item_type: str = "SET", condition: str | None = None,
+                          include_extras: bool = False, remarks: str | None = None,
+                          save_as: str | None = None) -> dict:
+    """Build a BrickLink wanted-list upload (XML) to paste into Wanted > Upload > 'Upload BrickLink XML format'.
+    Give either `parts` - a list like [{"no": "3023", "color_id": 88, "qty": 2, "type": "PART",
+    "condition": "U", "max_price": 0.10, "remarks": "..."}] (type defaults to PART) - or `from_item`
+    (e.g. "21322-1") to list a whole set/minifig part-out. Duplicate part+color rows are merged.
+    condition 'N' or 'U' applies to every row that doesn't set its own (omit for any condition).
+    save_as writes the XML to ~/bricklink-mcp/wanted/<save_as>.xml on this computer.
+    This only builds the file; it does not change anything on BrickLink."""
+    rows: list[dict] = []
+    if from_item:
+        data = _call("GET", f"/items/{_type(from_item_type)}/{from_item}/subsets", {"break_minifigs": "false"})
+        for group in data or []:
+            for e in group.get("entries", []):
+                if e.get("is_alternate") or e.get("is_counterpart"):
+                    continue
+                it = e.get("item", {})
+                qty = (e.get("quantity") or 0) + ((e.get("extra_quantity") or 0) if include_extras else 0)
+                rows.append({"type": it.get("type", "PART"), "no": it.get("no"),
+                             "color_id": e.get("color_id", 0), "qty": qty})
+    for p in parts or []:
+        if not p.get("no"):
+            raise BrickLinkError(f"Part row is missing 'no': {p}")
+        rows.append(p)
+    if not rows:
+        raise BrickLinkError("Nothing to build: pass `parts` or `from_item`.")
+
+    merged: dict[tuple, dict] = {}
+    for r in rows:
+        t = _type(r.get("type", "PART"))
+        if t not in _XML_TYPE:
+            raise BrickLinkError(f"Item type {t} can't go on a wanted list.")
+        key = (t, str(r["no"]), int(r.get("color_id") or 0), (r.get("condition") or condition or "").upper())
+        if key in merged:
+            merged[key]["qty"] += int(r.get("qty") or 1)
+        else:
+            merged[key] = {"qty": int(r.get("qty") or 1), "max_price": r.get("max_price"),
+                           "remarks": r.get("remarks") or remarks}
+
+    lines = ["<INVENTORY>"]
+    for (t, no, color, cond), v in merged.items():
+        item = [f"<ITEMTYPE>{_XML_TYPE[t]}</ITEMTYPE>", f"<ITEMID>{_xml_escape(no)}</ITEMID>"]
+        if color:
+            item.append(f"<COLOR>{color}</COLOR>")
+        item.append(f"<MINQTY>{v['qty']}</MINQTY>")
+        if cond in ("N", "U"):
+            item.append(f"<CONDITION>{cond}</CONDITION>")
+        if v["max_price"] is not None:
+            item.append(f"<MAXPRICE>{float(v['max_price']):.4f}</MAXPRICE>")
+        if v["remarks"]:
+            item.append(f"<REMARKS>{_xml_escape(v['remarks'])}</REMARKS>")
+        item.append("<NOTIFY>N</NOTIFY>")
+        lines.append("<ITEM>" + "".join(item) + "</ITEM>")
+    lines.append("</INVENTORY>")
+    xml = "\n".join(lines)
+
+    out = {"lots": len(merged), "pieces": sum(v["qty"] for v in merged.values()), "xml": xml}
+    if save_as:
+        import re
+        from pathlib import Path
+        name = re.sub(r"[^A-Za-z0-9._-]+", "_", save_as).strip("._") or "wanted"
+        folder = Path.home() / "bricklink-mcp" / "wanted"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{name}.xml"
+        path.write_text(xml, encoding="utf-8")
+        out["saved_to"] = str(path)
+    return out
+
+
 def _require_writes() -> None:
     if not _writes_allowed():
         raise BrickLinkError("Writes are disabled. Set BRICKLINK_ALLOW_WRITES=true in the server's "

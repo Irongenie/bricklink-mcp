@@ -94,6 +94,13 @@ Start a new chat and ask in plain English, for example:
 
 To let Claude change listings, set `"BRICKLINK_ALLOW_WRITES": "true"` and restart the app again. Claude Desktop still asks you to approve each change.
 
+### Buying parts (wanted lists)
+
+BrickLink's API has no buying functions: no carts, no checkout, and no wanted-list endpoints. What the server can do is **build a wanted-list file** with the `build_wanted_list_xml` tool, from a list of parts or from a whole set's part-out, merging duplicates and optionally saving it to `~/bricklink-mcp/wanted/`. Paste it into BrickLink → Wanted → Upload → "Upload BrickLink XML format", then use Wanted → Buy to find stores that have everything. Example asks:
+
+- "Make a wanted list of every part in 10497-1, used condition, and save it as galaxy-explorer."
+- "Build a wanted list for these parts: 2x 3023 reddish brown, 4x 2780 black."
+
 ## Troubleshooting
 
 - **Nothing shows under Developer after editing the config (Windows Store version):** the app may read `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`. The live log (`%LOCALAPPDATA%\Claude\Logs\main.log`) has a line "Reading claude_desktop_config.json from ..." that shows which file it uses.
